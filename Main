@@ -1,0 +1,133 @@
+#include <M5Stack.h>
+#include <Unit_Sonic.h>
+#include <WiFi.h>
+#include <Adafruit_MQTT.h>
+#include <Adafruit_MQTT_Client.h>
+#include <Adafruit_NeoPixel.h> // Library for SK6812 LED module
+
+const char* ssid = "HWS-IOT";
+const char* password = "*HWSFI#2024";
+
+const char* mqtt_server = "mqtt-broker.zdw31.cloud";
+const int mqtt_port = 1883;
+const char* mqtt_username = "user1";
+const char* mqtt_password = "HWSFI2024!";
+const char* mqtt_topic = "distance";
+
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, mqtt_server, mqtt_port, mqtt_username, mqtt_password);
+
+SONIC_I2C sensor;
+Adafruit_MQTT_Publish distancePub = Adafruit_MQTT_Publish(&mqtt, mqtt_topic);
+
+const int graphHeight = 180; // Increase graph height
+const int maxDataPoints = 300; // Increase number of data points
+int dataPoints[maxDataPoints] = {0};
+int dataIndex = 0;
+
+const int ledPin = 15; // Pin for SK6812 LED module
+const int motionSensorPin = 39; // GPIO Pin for motion sensor
+
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(1, ledPin, NEO_GRB + NEO_KHZ800);
+
+void MQTT_connect() {
+  int8_t ret;
+  Serial.print("Connecting to MQTT... ");
+  uint8_t retries = 3;
+  while ((ret = mqtt.connect()) != 0) {
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying MQTT connection in 5 seconds...");
+    mqtt.disconnect();
+    delay(5000);
+    retries--;
+    if (retries == 0) {
+      while (1);
+    }
+  }
+  Serial.println("MQTT Connected!");
+}
+
+void setup() {
+  M5.begin();
+  sensor.begin();
+  pixels.begin(); // Initialize LED module
+  pinMode(motionSensorPin, INPUT);
+  Serial.begin(9600);
+
+  // Connect to Wi-Fi
+  Serial.print("Connecting to Wi-Fi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println(" Wi-Fi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  // Setup screen
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setTextFont(1);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextColor(WHITE);
+
+  // Connect to MQTT
+  MQTT_connect();
+}
+
+void updateGraph(float value) {
+  dataPoints[dataIndex] = map(value, 0, 2000, 0, graphHeight);
+  dataIndex = (dataIndex + 1) % maxDataPoints;
+
+  M5.Lcd.fillRect(0, 30, maxDataPoints, graphHeight, BLACK); // Adjust position and size of graph
+  for (int i = 0; i < maxDataPoints - 1; i++) {
+    M5.Lcd.drawLine(i, 30 + graphHeight - dataPoints[(dataIndex + i) % maxDataPoints], i + 1, 30 + graphHeight - dataPoints[(dataIndex + i + 1) % maxDataPoints], GREEN); // Adjust position of graph
+  }
+}
+
+void loop() {
+  MQTT_connect();
+
+  float distance = sensor.getDistance();
+
+  distancePub.publish(distance);
+  Serial.println("Published distance: " + String(distance) + "mm");
+
+  updateGraph(distance);
+  M5.Lcd.fillRect(0, 0, 320, 20, BLACK);
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.print(String(M5.Power.getBatteryLevel()) + "% ");
+  M5.Lcd.print("Distance: ");
+  M5.Lcd.print(distance);
+  M5.Lcd.print(" mm");
+
+  // Check motion sensor
+  if (digitalRead(motionSensorPin) == HIGH) {
+    pixels.setPixelColor(0, pixels.Color(0, 255, 0)); // Green color for motion detected
+  } else {
+    pixels.setPixelColor(0, pixels.Color(0, 0, 0)); // Turn off LED if no motion
+  }
+  pixels.show();
+
+  M5.Lcd.setCursor(0, 220);
+  M5.Lcd.print("WiFi:");
+  if (WiFi.status() == WL_CONNECTED) {
+    M5.Lcd.setTextColor(GREEN);
+    M5.Lcd.print("Connected ");
+  } else {
+    M5.Lcd.setTextColor(RED);
+    M5.Lcd.print("Disconnected ");
+  }
+
+  M5.Lcd.print(" MQTT:");
+  if (mqtt.connected()) {
+    M5.Lcd.setTextColor(GREEN);
+    M5.Lcd.print("Connected ");
+  } else {
+    M5.Lcd.setTextColor(RED);
+    M5.Lcd.print("Disconnected ");
+  }
+
+  delay(10);
+}
